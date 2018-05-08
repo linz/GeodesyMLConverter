@@ -17,6 +17,10 @@ import requests
 logger = logging.getLogger(__name__) # pylint: disable=invalid-name
 logger.setLevel(logging.INFO)
 
+loggerStreamHandler = logging.StreamHandler()
+loggerStreamHandler.setLevel(logging.WARN)
+logger.addHandler(loggerStreamHandler)
+
 class SiteLogFtpSource(object):
     def __init__(self, host, path):
         self.host = host
@@ -27,11 +31,18 @@ site_log_ftp_sources = [ # pylint: disable=invalid-name
     SiteLogFtpSource('161.65.59.67', '/gps/sitelogs/logs'),
 ]
 
+class WrongDateStrException(Exception):
+    pass
+
 def parse_date(string):
     """
     Given date in format 'yyyymmdd', return python date(yyyy, mm, dd)
     """
-    return datetime.date(int(string[0:4]), int(string[4:6]), int(string[6:8]))
+    try:
+        return datetime.date(int(string[0:4]), int(string[4:6]), int(string[6:8]))
+    except Exception as e:
+        raise WrongDateStrException(string+' - '+ str(e))
+        return True
 
 def parse_site_log_file_name(file_name):
     """
@@ -51,7 +62,8 @@ class LogHunter(object):
             try:
                 ftp = ftplib.FTP(ftp_source.host)
                 ftp.set_debuglevel(0)
-                ftp.login('anonymous', 'anonymous@ga.gov.au')
+                ftp.login('anonymous', 'postionz-anon@linz.govt.nz')
+                ftp.set_pasv(False)
                 ftp.cwd(ftp_source.path)
 
                 self.ftp_connections.append(ftp)
@@ -116,7 +128,7 @@ class LogHunter(object):
 def gws_list_site_logs():
     site_logs = {}
 
-    gws_url = os.environ['gws_url']
+    gws_url = os.getenv('gws_url')
     response = requests.get(gws_url + '/siteLogs?projection=datePrepared&size=10000')
     response.raise_for_status()
     for site_log in response.json()['_embedded']['siteLogs']:
@@ -128,7 +140,7 @@ def lambda_handler(event, context):
     logHunter = LogHunter(site_log_ftp_sources, gws_list_site_logs())
 
     s3 = boto3.client('s3')
-    incoming_bucket_name = os.environ['incoming_bucket_name']
+    incoming_bucket_name = os.getenv('incoming_bucket_name')
 
     def upload_site_log(site_log_file, bucket_name):
         s3.put_object(
@@ -141,7 +153,5 @@ def lambda_handler(event, context):
     logHunter.with_site_log_updates(lambda site_log_file: upload_site_log(site_log_file, incoming_bucket_name))
 
 if __name__ == '__main__':
-    loggerStreamHandler = logging.StreamHandler()
-    loggerStreamHandler.setLevel(logging.INFO)
-    logger.addHandler(loggerStreamHandler)
+
     lambda_handler(None, None)
